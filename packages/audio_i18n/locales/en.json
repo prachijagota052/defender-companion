@@ -1,0 +1,7 @@
+{
+  "speak_prefix": "Alert.",
+  "title_default": "Security alert",
+  "why_default": "Microsoft Defender blocked a suspicious item.",
+  "explain_default": "This was blocked to help protect your computer.",
+  "steps_prefix": "Recommended steps are:"
+}

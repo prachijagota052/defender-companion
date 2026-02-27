@@ -1,0 +1,7 @@
+{
+  "speak_prefix": "अलर्ट।",
+  "title_default": "सुरक्षा अलर्ट",
+  "why_default": "Microsoft Defender ने एक संदिग्ध आइटम को ब्लॉक किया।",
+  "explain_default": "आपके कंप्यूटर की सुरक्षा के लिए इसे ब्लॉक किया गया।",
+  "steps_prefix": "सुझाए गए कदम हैं:"
+}
