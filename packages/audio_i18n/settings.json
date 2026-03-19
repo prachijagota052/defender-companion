@@ -1,0 +1,8 @@
+{
+  "enabled": true,
+  "language": "hi",
+  "use_online_tts": true,
+  "rate_delta": 0,
+  "voice_hint": "",
+  "max_steps_spoken": 2
+}

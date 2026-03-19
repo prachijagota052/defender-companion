@@ -1,0 +1,7 @@
+{
+  "speak_prefix": "Security Alert.",
+  "title_default": "A potential threat was detected.",
+  "why_default": "This item was blocked because",
+  "explain_default": "Further details:",
+  "steps_prefix": "To stay safe, please follow these steps:"
+}
