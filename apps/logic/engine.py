@@ -1,7 +1,7 @@
 # packages/logic/engine.py
 
 from packages.core.models import ThreatAlert, UserAlert
-from packages.logic.rules import THREAT_RULES
+from apps.logic.rules import THREAT_RULES
 from datetime import datetime
 
 
