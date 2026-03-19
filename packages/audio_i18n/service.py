@@ -5,21 +5,33 @@ from .tts import speak
 from .settings import load_settings  # This ensures we get the latest lang/mode
 
 def build_speech(alert, lang: str) -> str:
-    """Your original logic, kept exactly as you wrote it."""
-    title = alert.title or t("title_default", lang)
-    why = alert.why_blocked or t("why_default", lang)
-    explain = alert.explanation or t("explain_default", lang)
-
+    # Use the labels from your JSON
+    prefix = t("speak_prefix", lang)
+    title_label = t("title_default", lang)
+    why_label = t("why_default", lang)
+    
+    # Get the actual data from the DB
+    title_val = alert.title or ""
+    why_val = alert.why_blocked or ""
+    
+    # Constructing a natural sentence
+    # "Security Alert. Threat detected: EICAR Test File."
     parts = [
-        t("speak_prefix", lang),
-        title,
-        why,
-        explain,
+        f"{prefix}",
+        f"{title_label}: {title_val}.",
+        f"{why_label}: {why_val}."
     ]
 
+    # Only add explanation if it exists and isn't a duplicate
+    if alert.explanation and alert.explanation != alert.why_blocked:
+        parts.append(f"{t('explain_default', lang)} {alert.explanation}.")
+
+    # Make the steps sound like a list
     if alert.recommended_steps:
-        steps = alert.recommended_steps[:2]
-        parts.append(t("steps_prefix", lang) + " " + " ".join(steps))
+        parts.append(t("steps_prefix", lang))
+        # Add a pause between steps by joining with a period
+        steps_text = ". ".join(alert.recommended_steps[:2])
+        parts.append(f"{steps_text}.")
 
     return " ".join(parts)
 
