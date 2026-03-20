@@ -218,3 +218,8 @@ def mark_user_alert_spoken(user_alert_id: int) -> None:
             "UPDATE user_alerts SET spoken = 1 WHERE id = ?",
             (user_alert_id,),
         )
+
+def get_latest_user_alert() -> Optional[UserAlert]:
+    """Helper for the UI to get only the most recent alert."""
+    alerts = fetch_latest_user_alerts(limit=1)
+    return alerts[0] if alerts else None        

@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "language": "hi",
+  "language": "en",
   "use_online_tts": true,
   "rate_delta": 0,
   "voice_hint": "",
