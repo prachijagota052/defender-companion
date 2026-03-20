@@ -1,225 +1,249 @@
-import sqlite3
-from pathlib import Path
-from typing import List, Optional
-from datetime import datetime
+import os
 import json
+import sqlite3
+from datetime import datetime
 
-from .models import ThreatAlert, UserAlert
-
-# DB file path: repo_root/data/companion.db
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "companion.db"
+from packages.core.models import ThreatAlert, UserAlert
 
 
-def get_conn() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DB_PATH = os.path.join(BASE_DIR, "companion.db")
+
+
+def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
-    """Create required tables if they don't exist."""
-    with get_conn() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS threat_alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                source_type TEXT NOT NULL,
-                file_path TEXT,
-                threat_name TEXT,
-                action_taken TEXT,
-                severity TEXT,
-                raw_message TEXT,
-                processed INTEGER NOT NULL DEFAULT 0
-            );
-            """
+def init_db():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS threat_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            source_type TEXT,
+            file_path TEXT,
+            threat_name TEXT,
+            action_taken TEXT,
+            severity TEXT,
+            raw_message TEXT,
+            processed INTEGER DEFAULT 0
         )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                title TEXT NOT NULL,
-                why_blocked TEXT NOT NULL,
-                explanation TEXT NOT NULL,
-                recommended_steps TEXT NOT NULL,  -- JSON list
-                severity TEXT NOT NULL,
-                file_path TEXT,
-                threat_name TEXT,
-                source_type TEXT,
-                spoken INTEGER NOT NULL DEFAULT 0
-            );
-            """
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS user_alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            title TEXT,
+            why_blocked TEXT,
+            explanation TEXT,
+            recommended_steps TEXT,
+            severity TEXT,
+            file_path TEXT,
+            threat_name TEXT,
+            source_type TEXT,
+            spoken INTEGER DEFAULT 0,
+            shown INTEGER DEFAULT 0
         )
+    """)
+
+    conn.commit()
+    conn.close()
 
 
-# ----------------------------
-# Threat alerts (Member 1 -> DB)
-# ----------------------------
-def insert_threat_alert(alert: ThreatAlert) -> int:
-    init_db()
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO threat_alerts
-            (timestamp, source_type, file_path, threat_name, action_taken, severity, raw_message, processed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-            """,
-            (
-                alert.timestamp.isoformat(),
-                alert.source_type,
-                alert.file_path,
-                alert.threat_name,
-                alert.action_taken,
-                alert.severity,
-                alert.raw_message,
-            ),
+def _to_iso(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _parse_steps(value):
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except Exception:
+        return []
+
+
+def row_to_threat_alert(row):
+    return ThreatAlert(
+        id=row["id"],
+        timestamp=datetime.fromisoformat(row["timestamp"]),
+        source_type=row["source_type"],
+        file_path=row["file_path"],
+        threat_name=row["threat_name"],
+        action_taken=row["action_taken"],
+        severity=row["severity"],
+        raw_message=row["raw_message"],
+    )
+
+
+def row_to_user_alert(row):
+    return UserAlert(
+        id=row["id"],
+        timestamp=datetime.fromisoformat(row["timestamp"]),
+        title=row["title"],
+        why_blocked=row["why_blocked"],
+        explanation=row["explanation"],
+        recommended_steps=_parse_steps(row["recommended_steps"]),
+        severity=row["severity"],
+        file_path=row["file_path"],
+        threat_name=row["threat_name"],
+        source_type=row["source_type"],
+    )
+
+
+def insert_threat_alert(alert: ThreatAlert):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO threat_alerts (
+            timestamp, source_type, file_path, threat_name,
+            action_taken, severity, raw_message, processed
         )
-        return int(cur.lastrowid)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    """, (
+        _to_iso(alert.timestamp),
+        alert.source_type,
+        alert.file_path,
+        alert.threat_name,
+        alert.action_taken,
+        alert.severity,
+        alert.raw_message,
+    ))
+
+    conn.commit()
+    alert_id = cur.lastrowid
+    conn.close()
+    return alert_id
 
 
-def fetch_unprocessed_threat_alerts(limit: int = 50) -> List[ThreatAlert]:
-    init_db()
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM threat_alerts
-            WHERE processed = 0
-            ORDER BY id ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+def fetch_unprocessed_threat_alerts(limit=20):
+    conn = get_connection()
+    cur = conn.cursor()
 
-    alerts: List[ThreatAlert] = []
-    for r in rows:
-        alerts.append(
-            ThreatAlert(
-                id=r["id"],
-                timestamp=datetime.fromisoformat(r["timestamp"]),
-                source_type=r["source_type"],
-                file_path=r["file_path"],
-                threat_name=r["threat_name"],
-                action_taken=r["action_taken"],
-                severity=r["severity"],
-                raw_message=r["raw_message"],
-            )
+    cur.execute("""
+        SELECT * FROM threat_alerts
+        WHERE processed = 0
+        ORDER BY id ASC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [row_to_threat_alert(row) for row in rows]
+
+
+def mark_threat_processed(threat_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE threat_alerts
+        SET processed = 1
+        WHERE id = ?
+    """, (threat_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def insert_user_alert(alert: UserAlert):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO user_alerts (
+            timestamp, title, why_blocked, explanation,
+            recommended_steps, severity, file_path,
+            threat_name, source_type, spoken, shown
         )
-    return alerts
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
+    """, (
+        _to_iso(alert.timestamp),
+        alert.title,
+        alert.why_blocked,
+        alert.explanation,
+        json.dumps(alert.recommended_steps or []),
+        alert.severity,
+        alert.file_path,
+        alert.threat_name,
+        alert.source_type,
+    ))
+
+    conn.commit()
+    alert_id = cur.lastrowid
+    conn.close()
+    return alert_id
 
 
-def mark_threat_processed(threat_id: int) -> None:
-    init_db()
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE threat_alerts SET processed = 1 WHERE id = ?",
-            (threat_id,),
-        )
+def fetch_unspoken_user_alerts(limit=1):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT * FROM user_alerts
+        WHERE spoken = 0
+        ORDER BY id ASC
+        LIMIT ?
+    """, (limit,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [row_to_user_alert(row) for row in rows]
 
 
-# ----------------------------
-# User alerts (Member 2 -> DB; UI + Audio read)
-# ----------------------------
-def insert_user_alert(alert: UserAlert) -> int:
-    init_db()
-    with get_conn() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO user_alerts
-            (timestamp, title, why_blocked, explanation, recommended_steps, severity,
-             file_path, threat_name, source_type, spoken)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            """,
-            (
-                alert.timestamp.isoformat(),
-                alert.title,
-                alert.why_blocked,
-                alert.explanation,
-                json.dumps(alert.recommended_steps, ensure_ascii=False),
-                alert.severity,
-                alert.file_path,
-                alert.threat_name,
-                alert.source_type,
-            ),
-        )
-        return int(cur.lastrowid)
+def mark_user_alert_spoken(alert_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE user_alerts
+        SET spoken = 1
+        WHERE id = ?
+    """, (alert_id,))
+
+    conn.commit()
+    conn.close()
 
 
-def fetch_latest_user_alerts(limit: int = 50) -> List[UserAlert]:
-    init_db()
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM user_alerts
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+def fetch_unshown_user_alert():
+    conn = get_connection()
+    cur = conn.cursor()
 
-    alerts: List[UserAlert] = []
-    for r in rows:
-        alerts.append(
-            UserAlert(
-                id=r["id"],
-                timestamp=datetime.fromisoformat(r["timestamp"]),
-                title=r["title"],
-                why_blocked=r["why_blocked"],
-                explanation=r["explanation"],
-                recommended_steps=json.loads(r["recommended_steps"]),
-                severity=r["severity"],
-                file_path=r["file_path"],
-                threat_name=r["threat_name"],
-                source_type=r["source_type"],
-            )
-        )
-    return alerts
+    cur.execute("""
+        SELECT * FROM user_alerts
+        WHERE shown = 0
+        ORDER BY id ASC
+        LIMIT 1
+    """)
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return row_to_user_alert(row)
 
 
-def fetch_unspoken_user_alerts(limit: int = 20) -> List[UserAlert]:
-    """For Member 4 (audio): get alerts that haven't been spoken yet."""
-    init_db()
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM user_alerts
-            WHERE spoken = 0
-            ORDER BY id ASC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+def mark_user_alert_shown(alert_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
 
-    alerts: List[UserAlert] = []
-    for r in rows:
-        alerts.append(
-            UserAlert(
-                id=r["id"],
-                timestamp=datetime.fromisoformat(r["timestamp"]),
-                title=r["title"],
-                why_blocked=r["why_blocked"],
-                explanation=r["explanation"],
-                recommended_steps=json.loads(r["recommended_steps"]),
-                severity=r["severity"],
-                file_path=r["file_path"],
-                threat_name=r["threat_name"],
-                source_type=r["source_type"],
-            )
-        )
-    return alerts
+    cur.execute("""
+        UPDATE user_alerts
+        SET shown = 1
+        WHERE id = ?
+    """, (alert_id,))
 
-
-def mark_user_alert_spoken(user_alert_id: int) -> None:
-    """For Member 4: mark alert as spoken so it won't repeat."""
-    init_db()
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE user_alerts SET spoken = 1 WHERE id = ?",
-            (user_alert_id,),
-        )
-
-def get_latest_user_alert() -> Optional[UserAlert]:
-    """Helper for the UI to get only the most recent alert."""
-    alerts = fetch_latest_user_alerts(limit=1)
-    return alerts[0] if alerts else None        
+    conn.commit()
+    conn.close()

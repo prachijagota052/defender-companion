@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "language": "hi",
+  "max_steps_spoken": 3,
+  "use_online_tts": false
+}

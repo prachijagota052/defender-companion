@@ -1,75 +1,152 @@
+import os
 import time
+
 from packages.core.db import fetch_unspoken_user_alerts, mark_user_alert_spoken
-from .i18n import t
-from .tts import speak
-from .settings import load_settings  # This ensures we get the latest lang/mode
+from .settings import load_settings
+from .tts import speak_interruptible
+from .i18n import build_speech_text
 
-def build_speech(alert, lang: str) -> str:
-    # Use the labels from your JSON
-    prefix = t("speak_prefix", lang)
-    title_label = t("title_default", lang)
-    why_label = t("why_default", lang)
-    
-    # Get the actual data from the DB
-    title_val = alert.title or ""
-    why_val = alert.why_blocked or ""
-    
-    # Constructing a natural sentence
-    # "Security Alert. Threat detected: EICAR Test File."
-    parts = [
-        f"{prefix}",
-        f"{title_label}: {title_val}.",
-        f"{why_label}: {why_val}."
-    ]
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+FLAG_FILE = os.path.join(BASE_DIR, "speaking.flag")
+DISMISS_FILE = os.path.join(BASE_DIR, "dismiss.flag")
 
-    # Only add explanation if it exists and isn't a duplicate
-    if alert.explanation and alert.explanation != alert.why_blocked:
-        parts.append(f"{t('explain_default', lang)} {alert.explanation}.")
 
-    # Make the steps sound like a list
-    if alert.recommended_steps:
-        parts.append(t("steps_prefix", lang))
-        # Add a pause between steps by joining with a period
-        steps_text = ". ".join(alert.recommended_steps[:2])
-        parts.append(f"{steps_text}.")
+def set_speaking(flag: bool):
+    try:
+        if flag:
+            with open(FLAG_FILE, "w", encoding="utf-8") as f:
+                f.write("speaking")
+        else:
+            if os.path.exists(FLAG_FILE):
+                os.remove(FLAG_FILE)
+    except Exception as e:
+        print(f"[FLAG ERROR] {e}")
 
-    return " ".join(parts)
+
+def is_dismissed() -> bool:
+    return os.path.exists(DISMISS_FILE)
+
+
+def clear_dismiss():
+    try:
+        if os.path.exists(DISMISS_FILE):
+            os.remove(DISMISS_FILE)
+    except Exception as e:
+        print(f"[DISMISS CLEAR ERROR] {e}")
+
+
+def settings_signature(cfg):
+    return (
+        cfg.enabled,
+        cfg.language,
+        cfg.use_online_tts,
+        cfg.rate_delta,
+        cfg.voice_hint,
+        cfg.max_steps_spoken,
+    )
+
+
+def build_quick_alert(alert, lang: str) -> str:
+    threat = alert.threat_name or "Unknown Threat"
+
+    if lang == "hi":
+        return f"सुरक्षा चेतावनी। खतरा पाया गया। {threat}."
+    if lang == "mr":
+        return f"सुरक्षा इशारा. धोका आढळला. {threat}."
+    return f"Security alert. Threat detected. {threat}."
+
 
 def run_audio_service():
-    print("--- Defender Companion Audio Service is Running ---")
-    print("Polling for new alerts... (Ctrl+C to stop)")
+    print("[AUDIO] Service started...")
 
     while True:
-        # 1. Always load settings at the start of the loop
-        # This allows the UI to change language or mute audio instantly!
+        alerts = fetch_unspoken_user_alerts(limit=1)
+
+        if not alerts:
+            set_speaking(False)
+            clear_dismiss()
+            time.sleep(0.3)
+            continue
+
+        alert = alerts[0]
         cfg = load_settings()
 
         if not cfg.enabled:
-            time.sleep(2)
+            set_speaking(False)
+            time.sleep(0.3)
             continue
 
-        # 2. Get one alert at a time to keep it real-time
-        alerts = fetch_unspoken_user_alerts(limit=1)
+        start_sig = settings_signature(cfg)
 
-        for a in alerts:
-            # 3. Use the language from settings.json
-            text = build_speech(a, cfg.language)
-            
-            print(f"[{cfg.language.upper()}] Speaking ID: {a.id} - {a.title}")
-            
-            # 4. Speak using the Online/Offline logic we built in tts.py
-            # Note: Ensure your tts.py 'speak' function accepts 'use_online'
-            speak(text, lang=cfg.language, use_online=cfg.use_online_tts)
-            
-            # 5. Mark as spoken so it doesn't repeat
-            mark_user_alert_spoken(a.id)
-            print(f"Success: Alert {a.id} marked as spoken.")
+        quick_text = build_quick_alert(alert, cfg.language)
+        full_text = build_speech_text(alert, cfg.language, cfg.max_steps_spoken)
 
-        # 6. Wait a few seconds before checking the DB again
-        time.sleep(3)
+        def should_stop():
+            latest = load_settings()
+            return is_dismissed() or settings_signature(latest) != start_sig
+
+        print(f"[AUDIO] Quick alert for id={alert.id} in {cfg.language}")
+        set_speaking(True)
+
+        quick_finished = speak_interruptible(
+            text=quick_text,
+            lang=cfg.language,
+            enabled=cfg.enabled,
+            stop_checker=should_stop,
+        )
+
+        if is_dismissed():
+            set_speaking(False)
+            mark_user_alert_spoken(alert.id)
+            clear_dismiss()
+            print(f"[AUDIO] Alert {alert.id} dismissed during quick alert")
+            time.sleep(0.2)
+            continue
+
+        if not quick_finished:
+            set_speaking(False)
+            time.sleep(0.2)
+            continue
+
+        latest_cfg = load_settings()
+        if settings_signature(latest_cfg) != start_sig or not latest_cfg.enabled:
+            set_speaking(False)
+            time.sleep(0.2)
+            continue
+
+        print(f"[AUDIO] Full alert for id={alert.id} in {cfg.language}")
+
+        full_finished = speak_interruptible(
+            text=full_text,
+            lang=cfg.language,
+            enabled=cfg.enabled,
+            stop_checker=should_stop,
+        )
+
+        set_speaking(False)
+
+        if is_dismissed():
+            mark_user_alert_spoken(alert.id)
+            clear_dismiss()
+            print(f"[AUDIO] Alert {alert.id} dismissed during full alert")
+            time.sleep(0.2)
+            continue
+
+        latest_cfg = load_settings()
+
+        if full_finished and latest_cfg.enabled and latest_cfg.language == cfg.language:
+            mark_user_alert_spoken(alert.id)
+            print(f"[AUDIO] Alert {alert.id} marked spoken")
+        else:
+            print(f"[AUDIO] Alert {alert.id} will retry with updated settings")
+
+        time.sleep(0.2)
+
 
 if __name__ == "__main__":
     try:
         run_audio_service()
     except KeyboardInterrupt:
-        print("\nAudio service shut down gracefully.")
+        set_speaking(False)
+        clear_dismiss()
+        print("\n[AUDIO] Stopped.")

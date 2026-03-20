@@ -1,49 +1,49 @@
-import subprocess
-import sys
 import time
-import os
-# Import your DB functions
+
 from packages.core.db import (
-    fetch_unprocessed_threat_alerts, 
-    mark_threat_processed, 
-    insert_user_alert
+    fetch_unprocessed_threat_alerts,
+    insert_user_alert,
+    mark_threat_processed,
 )
 from packages.logic.engine import convert_to_user_alert
 
-def run_logic_engine():
-    print("🧠 Logic Engine (Runner) is active and polling for threats...")
-    
-    while True:
+
+def process_once():
+    threats = fetch_unprocessed_threat_alerts(limit=20)
+
+    if threats:
+        print(f"[RUNNER] Found {len(threats)} unprocessed threat(s)")
+
+    for threat in threats:
         try:
-            # 1. Check for new raw threats from the Listener
-            threats = fetch_unprocessed_threat_alerts(limit=1)
-            
-            if threats:
-                threat = threats[0]
-                print(f"🚨 New threat found: {threat.threat_name}. Processing...")
+            print(
+                f"[RUNNER] Processing threat_id={threat.id} | "
+                f"threat_name={threat.threat_name} | severity={threat.severity}"
+            )
 
-                # 2. Convert raw threat to Detailed UserAlert
-                user_alert = convert_to_user_alert(threat)
-                
-                # 3. Save to user_alerts table (this wakes up the Audio Service)
-                insert_user_alert(user_alert)
-                
-                # 4. Mark the raw threat as done
-                mark_threat_processed(threat.id)
-                print(f"✅ Threat {threat.id} processed. Triggering UI Pop-up...")
+            user_alert = convert_to_user_alert(threat)
+            user_alert_id = insert_user_alert(user_alert)
+            mark_threat_processed(threat.id)
 
-                # 5. LAUNCH THE UI POP-UP
-                # We use the current python executable to run the UI module
-                subprocess.Popen([sys.executable, "-m", "packages.ui.main"])
-            
+            print(
+                f"[RUNNER] Processed threat_id={threat.id} -> "
+                f"user_alert_id={user_alert_id}"
+            )
+
         except Exception as e:
-            print(f"❌ Runner Error: {e}")
-        
-        # Poll every 2 seconds
-        time.sleep(2)
+            print(f"[RUNNER ERROR] threat_id={threat.id} | {e}")
+
+
+def main():
+    print("[RUNNER] Running continuously...")
+
+    try:
+        while True:
+            process_once()
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("[RUNNER] Stopped.")
+
 
 if __name__ == "__main__":
-    try:
-        run_logic_engine()
-    except KeyboardInterrupt:
-        print("\nStopping Runner...")
+    main()
