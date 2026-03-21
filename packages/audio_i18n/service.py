@@ -1,7 +1,11 @@
 import os
 import time
 
-from packages.core.db import fetch_unspoken_user_alerts, mark_user_alert_spoken
+from packages.core.db import (
+    fetch_unspoken_user_alerts,
+    mark_user_alert_done,
+    mark_user_alert_spoken,
+)
 from .settings import load_settings
 from .tts import speak_interruptible
 from .i18n import build_speech_text
@@ -46,18 +50,10 @@ def settings_signature(cfg):
     )
 
 
-def build_quick_alert(alert, lang: str) -> str:
-    threat = alert.threat_name or "Unknown Threat"
-
-    if lang == "hi":
-        return f"सुरक्षा चेतावनी। खतरा पाया गया। {threat}."
-    if lang == "mr":
-        return f"सुरक्षा इशारा. धोका आढळला. {threat}."
-    return f"Security alert. Threat detected. {threat}."
-
-
 def run_audio_service():
     print("[AUDIO] Service started...")
+    clear_dismiss()
+    set_speaking(False)
 
     while True:
         alerts = fetch_unspoken_user_alerts(limit=1)
@@ -77,46 +73,16 @@ def run_audio_service():
             continue
 
         start_sig = settings_signature(cfg)
-
-        quick_text = build_quick_alert(alert, cfg.language)
         full_text = build_speech_text(alert, cfg.language, cfg.max_steps_spoken)
 
         def should_stop():
             latest = load_settings()
             return is_dismissed() or settings_signature(latest) != start_sig
 
-        print(f"[AUDIO] Quick alert for id={alert.id} in {cfg.language}")
+        print(f"[AUDIO] Speaking alert id={alert.id} in {cfg.language}")
         set_speaking(True)
 
-        quick_finished = speak_interruptible(
-            text=quick_text,
-            lang=cfg.language,
-            enabled=cfg.enabled,
-            stop_checker=should_stop,
-        )
-
-        if is_dismissed():
-            set_speaking(False)
-            mark_user_alert_spoken(alert.id)
-            clear_dismiss()
-            print(f"[AUDIO] Alert {alert.id} dismissed during quick alert")
-            time.sleep(0.2)
-            continue
-
-        if not quick_finished:
-            set_speaking(False)
-            time.sleep(0.2)
-            continue
-
-        latest_cfg = load_settings()
-        if settings_signature(latest_cfg) != start_sig or not latest_cfg.enabled:
-            set_speaking(False)
-            time.sleep(0.2)
-            continue
-
-        print(f"[AUDIO] Full alert for id={alert.id} in {cfg.language}")
-
-        full_finished = speak_interruptible(
+        finished = speak_interruptible(
             text=full_text,
             lang=cfg.language,
             enabled=cfg.enabled,
@@ -126,19 +92,19 @@ def run_audio_service():
         set_speaking(False)
 
         if is_dismissed():
-            mark_user_alert_spoken(alert.id)
+            mark_user_alert_done(alert.id)
             clear_dismiss()
-            print(f"[AUDIO] Alert {alert.id} dismissed during full alert")
+            print(f"[AUDIO] Alert {alert.id} dismissed and closed")
             time.sleep(0.2)
             continue
 
         latest_cfg = load_settings()
 
-        if full_finished and latest_cfg.enabled and latest_cfg.language == cfg.language:
+        if finished and latest_cfg.enabled and latest_cfg.language == cfg.language:
             mark_user_alert_spoken(alert.id)
             print(f"[AUDIO] Alert {alert.id} marked spoken")
         else:
-            print(f"[AUDIO] Alert {alert.id} will retry with updated settings")
+            print(f"[AUDIO] Alert {alert.id} interrupted; waiting for retry/update")
 
         time.sleep(0.2)
 

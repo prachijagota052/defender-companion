@@ -15,12 +15,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from packages.core.db import fetch_unshown_user_alert, mark_user_alert_shown
+from packages.core.db import (
+    fetch_unshown_user_alert,
+    mark_user_alert_done,
+    mark_user_alert_shown,
+)
 from packages.audio_i18n.settings import load_settings, save_settings
 from packages.audio_i18n.i18n import build_popup_text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DISMISS_FILE = os.path.join(BASE_DIR, "dismiss.flag")
+SPEAKING_FILE = os.path.join(BASE_DIR, "speaking.flag")
 
 
 class DefenderUI(QWidget):
@@ -32,8 +37,6 @@ class DefenderUI(QWidget):
         self.current_avatar_state = False
 
         assets_dir = os.path.join(BASE_DIR, "assets")
-        self.flag_path = os.path.join(BASE_DIR, "speaking.flag")
-
         self.neutral_path = os.path.join(assets_dir, "avatar_neutral.png")
         self.talk_path = os.path.join(assets_dir, "avatar_talk.png")
 
@@ -101,15 +104,15 @@ class DefenderUI(QWidget):
 
         self.db_timer = QTimer()
         self.db_timer.timeout.connect(self.poll_db)
-        self.db_timer.start(1000)
+        self.db_timer.start(120)
 
         self.speaking_timer = QTimer()
         self.speaking_timer.timeout.connect(self.check_speaking_status)
-        self.speaking_timer.start(150)
+        self.speaking_timer.start(60)
 
         self.anim_timer = QTimer()
         self.anim_timer.timeout.connect(self.animate_avatar)
-        self.anim_timer.setInterval(120)
+        self.anim_timer.setInterval(70)
 
     def load_ui_settings(self):
         lang = self.settings_obj.language
@@ -125,12 +128,10 @@ class DefenderUI(QWidget):
         self.settings_obj.language = self.lang_combo.currentData()
         save_settings(self.settings_obj)
         self.refresh_current_alert_text()
-        print(f"[UI] Language changed to {self.settings_obj.language}")
 
     def on_mute_changed(self):
         self.settings_obj.enabled = not self.mute_checkbox.isChecked()
         save_settings(self.settings_obj)
-        print(f"[UI] Voice enabled: {self.settings_obj.enabled}")
 
     def set_avatar(self, image_path: str):
         if os.path.exists(image_path):
@@ -142,6 +143,9 @@ class DefenderUI(QWidget):
 
     def poll_db(self):
         try:
+            if self.current_alert is not None and self.isVisible():
+                return
+
             alert = fetch_unshown_user_alert()
             if alert:
                 self.display_alert(alert)
@@ -168,11 +172,15 @@ class DefenderUI(QWidget):
 
     def hide_alert(self):
         try:
+            if self.current_alert:
+                mark_user_alert_done(self.current_alert.id)
+
             with open(DISMISS_FILE, "w", encoding="utf-8") as f:
                 f.write("dismissed")
         except Exception as e:
             print(f"[UI DISMISS ERROR] {e}")
 
+        self.current_alert = None
         self.stop_lip_sync()
         self.hide()
 
@@ -198,7 +206,7 @@ class DefenderUI(QWidget):
         self.current_avatar_state = not self.current_avatar_state
 
     def check_speaking_status(self):
-        if os.path.exists(self.flag_path):
+        if os.path.exists(SPEAKING_FILE):
             self.start_lip_sync()
         else:
             self.stop_lip_sync()

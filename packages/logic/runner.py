@@ -11,25 +11,15 @@ from packages.logic.engine import convert_to_user_alert
 def process_once():
     threats = fetch_unprocessed_threat_alerts(limit=20)
 
-    if threats:
-        print(f"[RUNNER] Found {len(threats)} unprocessed threat(s)")
-
     for threat in threats:
         try:
-            print(
-                f"[RUNNER] Processing threat_id={threat.id} | "
-                f"threat_name={threat.threat_name} | severity={threat.severity}"
-            )
-
             user_alert = convert_to_user_alert(threat)
             user_alert_id = insert_user_alert(user_alert)
             mark_threat_processed(threat.id)
 
             print(
-                f"[RUNNER] Processed threat_id={threat.id} -> "
-                f"user_alert_id={user_alert_id}"
+                f"[RUNNER] Processed threat_id={threat.id} -> user_alert_id={user_alert_id}"
             )
-
         except Exception as e:
             print(f"[RUNNER ERROR] threat_id={threat.id} | {e}")
 

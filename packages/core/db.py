@@ -5,7 +5,6 @@ from datetime import datetime
 
 from packages.core.models import ThreatAlert, UserAlert
 
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB_PATH = os.path.join(BASE_DIR, "companion.db")
 
@@ -137,7 +136,6 @@ def fetch_unprocessed_threat_alerts(limit=20):
 
     rows = cur.fetchall()
     conn.close()
-
     return [row_to_threat_alert(row) for row in rows]
 
 
@@ -197,7 +195,6 @@ def fetch_unspoken_user_alerts(limit=1):
 
     rows = cur.fetchall()
     conn.close()
-
     return [row_to_user_alert(row) for row in rows]
 
 
@@ -231,7 +228,6 @@ def fetch_unshown_user_alert():
 
     if not row:
         return None
-
     return row_to_user_alert(row)
 
 
@@ -244,6 +240,38 @@ def mark_user_alert_shown(alert_id: int):
         SET shown = 1
         WHERE id = ?
     """, (alert_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def mark_user_alert_done(alert_id: int):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE user_alerts
+        SET shown = 1, spoken = 1
+        WHERE id = ?
+    """, (alert_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def mark_all_shown_alerts_spoken():
+    """
+    Startup cleanup:
+    if an alert was already shown in a previous run, do not speak it again.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE user_alerts
+        SET spoken = 1
+        WHERE shown = 1 AND spoken = 0
+    """)
 
     conn.commit()
     conn.close()
